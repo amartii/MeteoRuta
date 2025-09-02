@@ -1,0 +1,120 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: weather-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./config/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    # Fuerza opciones seguras para contenedor: escucha en red, primer plano y logs a stdout
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--bind", "0.0.0.0", "--daemonize", "no", "--logfile", ""]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  telegram-bot:
+    build: ./services/telegram-bot
+    container_name: weather-telegram-bot
+    depends_on:
+      redis:
+        condition: service_healthy
+      route-processor:
+        condition: service_started
+      weather-orchestrator:
+        condition: service_started
+      response-composer:
+        condition: service_started
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - WEBHOOK_URL=${WEBHOOK_URL}
+      - REDIS_URL=redis://redis:6379
+      - ROUTE_PROCESSOR_URL=http://route-processor:3001
+      - WEATHER_ORCHESTRATOR_URL=http://weather-orchestrator:3002
+      - RESPONSE_COMPOSER_URL=http://response-composer:3003
+      - NODE_ENV=${NODE_ENV:-development}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - RATE_LIMIT_WINDOW_MS=${RATE_LIMIT_WINDOW_MS:-60000}
+      - RATE_LIMIT_MAX_REQUESTS=${RATE_LIMIT_MAX_REQUESTS:-30}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./services/telegram-bot/logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  route-processor:
+    build: ./services/route-processor
+    container_name: weather-route-processor
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - ORS_API_KEY=${ORS_API_KEY}
+      - OSRM_URL=${OSRM_URL:-http://router.project-osrm.org}
+      - NODE_ENV=${NODE_ENV:-development}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./services/route-processor/logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  weather-orchestrator:
+    build: ./services/weather-orchestrator
+    container_name: weather-orchestrator
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - METEOBLUE_API_KEY=${METEOBLUE_API_KEY}
+      - AEMET_API_KEY=${AEMET_API_KEY}
+      - WINDY_API_KEY=${WINDY_API_KEY}
+      - METEORED_API_KEY=${METEORED_API_KEY}
+      - NODE_ENV=${NODE_ENV:-development}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    ports:
+      - "3002:3002"
+    volumes:
+      - ./services/weather-orchestrator/logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  response-composer:
+    build: ./services/response-composer
+    container_name: weather-response-composer
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    ports:
+      - "3003:3003"
+    volumes:
+      - ./services/response-composer/logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  redis_data:
